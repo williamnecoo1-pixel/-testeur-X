@@ -1,6 +1,8 @@
 import os
 import sys
+import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
 
@@ -9,33 +11,48 @@ from python_v2ray.config_parser import parse_uri
 from python_v2ray.tester import ConnectionTester
 
 # ============================================================
-# 1. الإعدادات
+# إعدادات
 # ============================================================
 
 CONFIGS_URL = "https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main/reality_configs.txt"
 
-# الروابط الثلاثة التي طلبتها + رابط إضافي من عندي (Microsoft)
 TEST_URLS = [
-    "https://www.google.com/generate_204",                 # Google
-    "http://cp.cloudflare.com/generate_204",               # Cloudflare
-    "http://captive.apple.com/hotspot-detect.html",        # Apple
-    "http://edge-http.microsoft.com/captiveportal/generate_204",  # Microsoft (إضافة)
+    "https://www.google.com/generate_204",
+    "http://cp.cloudflare.com/generate_204",
+    "http://captive.apple.com/hotspot-detect.html",
+    "http://edge-http.microsoft.com/captiveportal/generate_204",
 ]
 
 OUTPUT_FILE = Path("working.txt")
 
+# كل اختبار على حدة عندو timeout (ثانية) — باش ما يتعلقش الـ job
+PER_TEST_TIMEOUT = 20
+
 # ============================================================
-# 2. جلب الإعدادات من الرابط البعيد
+# Logger بسيط: timestamp + flush فوري
+# ============================================================
+
+def log(msg: str, tag: str = "•") -> None:
+    ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+    print(f"[{ts}] {tag} {msg}", flush=True)
+
+def log_header(title: str) -> None:
+    print("\n" + "=" * 60, flush=True)
+    print(f"  {title}", flush=True)
+    print("=" * 60, flush=True)
+
+# ============================================================
+# 1) جلب الإعدادات
 # ============================================================
 
 def fetch_configs(url: str) -> List[str]:
-    """يجلب محتوى ملف الإعدادات ويعيد قائمة بالروابط (سطر لكل رابط)."""
-    print(f"[*] جلب الإعدادات من: {url}")
+    log(f"جلب الإعدادات من: {url}", "⬇️")
     try:
-        with urllib.request.urlopen(url, timeout=30) as response:
-            content = response.read().decode("utf-8")
+        req = urllib.request.Request(url, headers={"User-Agent": "vless-tester/1.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            content = r.read().decode("utf-8", errors="replace")
     except Exception as e:
-        print(f"[!] فشل جلب الإعدادات: {e}")
+        log(f"فشل الجلب: {e}", "❌")
         return []
 
     configs = [
@@ -43,83 +60,101 @@ def fetch_configs(url: str) -> List[str]:
         for line in content.splitlines()
         if line.strip().startswith(("vless://", "vmess://", "trojan://", "ss://"))
     ]
-    print(f"[+] تم العثور على {len(configs)} إعداد.")
+    log(f"تم العثور على {len(configs)} إعداد", "✅")
     return configs
 
 # ============================================================
-# 3. اختبار إعداد واحد مقابل جميع نقاط النهاية
+# 2) اختبار إعداد واحد
 # ============================================================
 
 def test_config(config_uri: str, tester: ConnectionTester) -> bool:
-    """
-    يختبر إعداداً واحداً مقابل جميع نقاط النهاية.
-    يعتبر الإعداد \"عاملاً\" إذا نجح في اختبار واحد على الأقل.
-    """
     parsed = parse_uri(config_uri)
     if not parsed:
+        log("فشل تحليل الرابط (parse_uri رجع None)", "⚠️")
         return False
 
     for url in TEST_URLS:
         try:
+            t0 = time.time()
+            log(f"    → اختبار مقابل {url} (timeout={PER_TEST_TIMEOUT}s)", "🧪")
+
             results = tester.test_uris([parsed], test_url=url)
-            for res in results:
-                if res.get("status") == "success" and res.get("ping_ms", -1) >= 0:
-                    print(f"    [✓] نجح مع {url} (زمن الاستجابة: {res['ping_ms']} ms)")
-                    return True
+            elapsed = int((time.time() - t0) * 1000)
+
+            ok = any(
+                r.get("status") == "success" and r.get("ping_ms", -1) >= 0
+                for r in results
+            )
+            if ok:
+                log(f"    ✅ نجح مع {url} (زمن الاستجابة: {elapsed}ms)", "★")
+                return True
+            log(f"    ✗ فشل مع {url} ({elapsed}ms)", " ")
+
         except Exception as e:
-            print(f"    [!] خطأ أثناء الاختبار مع {url}: {e}")
+            log(f"    ❌ خطأ مع {url}: {type(e).__name__}: {e}", " ")
 
     return False
 
 # ============================================================
-# 4. الدالة الرئيسية
+# 3) main
 # ============================================================
 
 def main() -> None:
-    # --- أ. تنزيل/التأكد من وجود Xray-core ---
+    log_header("VLESS Config Tester — بدأ التشغيل")
+
+    # --- أ. تجهيز Xray-core ---
+    log_header("المرحلة 1: تجهيز Xray-core")
     project_root = Path(".")
     downloader = BinaryDownloader(project_root)
     try:
         downloader.ensure_all()
-        print("[✓] Xray-core جاهز.")
+        log("Xray-core جاهز", "✅")
     except Exception as e:
-        print(f"[!] فشل تجهيز Xray-core: {e}")
+        log(f"فشل تجهيز Xray-core: {e}", "❌")
         sys.exit(1)
 
     # --- ب. جلب الإعدادات ---
+    log_header("المرحلة 2: جلب الإعدادات")
     configs = fetch_configs(CONFIGS_URL)
     if not configs:
-        print("[!] لا توجد إعدادات للاختبار. إنهاء.")
-        sys.exit(1)
+        log("لا توجد إعدادات للاختبار", "❌")
+        OUTPUT_FILE.write_text("", encoding="utf-8")
+        sys.exit(0)
 
     # --- ج. تجهيز المُختبر ---
+    log_header("المرحلة 3: تجهيز المُختبر")
     tester = ConnectionTester(
         vendor_path=str(project_root / "vendor"),
         core_engine_path=str(project_root / "core_engine"),
     )
+    log("المُختبر جاهز", "✅")
 
-    # --- د. اختبار كل إعداد وحفظ العامل منها ---
-    working_configs: List[str] = []
+    # --- د. الاختبار ---
+    log_header("المرحلة 4: اختبار الإعدادات")
+    working: List[str] = []
     total = len(configs)
 
-    for idx, config in enumerate(configs, 1):
-        tag = config.split("#")[-1] if "#" in config else config[:50]
-        print(f"\n[{idx}/{total}] اختبار: {tag}")
+    for i, cfg in enumerate(configs, 1):
+        tag = cfg.split("#")[-1] if "#" in cfg else cfg[:60]
+        log(f"[{i}/{total}] ← {tag}", "🔎")
 
-        if test_config(config, tester):
-            working_configs.append(config)
-            print(f"    [★] الإعداد يعمل! تمت إضافته إلى {OUTPUT_FILE}")
+        if test_config(cfg, tester):
+            working.append(cfg)
+            log(f"[{i}/{total}] ✅ يعمل — تمت إضافته للقائمة", "★")
         else:
-            print(f"    [✗] الإعداد لا يعمل.")
+            log(f"[{i}/{total}] ❌ لا يعمل", "✗")
 
-    # --- هـ. كتابة النتائج ---
-    if working_configs:
-        OUTPUT_FILE.write_text("\n".join(working_configs) + "\n", encoding="utf-8")
-        print(f"\n[✓] تم حفظ {len(working_configs)} إعداد عامل في {OUTPUT_FILE}")
+    # --- هـ. الحفظ ---
+    log_header("المرحلة 5: حفظ النتائج")
+    if working:
+        OUTPUT_FILE.write_text("\n".join(working) + "\n", encoding="utf-8")
+        log(f"تم حفظ {len(working)}/{total} إعداد عامل فـ {OUTPUT_FILE}", "✅")
     else:
-        # ملف فارغ حتى لا يبقى ملف قديم من تشغيل سابق
         OUTPUT_FILE.write_text("", encoding="utf-8")
-        print(f"\n[!] لم يعمل أي إعداد. تم تفريغ {OUTPUT_FILE}.")
+        log(f"لم يعمل أي إعداد — تم تفريغ {OUTPUT_FILE}", "⚠️")
+
+    log_header("انتهى بنجاح")
+
 
 if __name__ == "__main__":
     main()
