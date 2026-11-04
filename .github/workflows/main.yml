@@ -2,12 +2,16 @@ name: VLESS Config Tester
 
 on:
   schedule:
-    # كل 8 ساعات (الساعة 00:00، 08:00، 16:00 بتوقيت UTC)
     - cron: '0 */8 * * *'
-  workflow_dispatch:   # يسمح بالتشغيل اليدوي من تبويب Actions
+  workflow_dispatch:
 
 permissions:
-  contents: write   # ضروري لعمل commit لملف working.txt
+  contents: write
+
+env:
+  # ← هذا هو المفتاح: يجبر Python على عدم تخزين الـ output فـ buffer
+  PYTHONUNBUFFERED: "1"
+  PYTHONIOENCODING: "utf-8"
 
 jobs:
   test-configs:
@@ -15,37 +19,70 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: 📥 Checkout repository
+      - name: 📥 Checkout
         uses: actions/checkout@v4
 
-      - name: 🐍 Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      - name: 📦 Install dependencies
+      - name: 📦 Install deps
         run: |
+          set -euo pipefail
+          echo "▶️  تحديث pip..."
           python -m pip install --upgrade pip
+          echo "▶️  تثبيت المكتبات..."
           pip install -r requirements.txt
+          echo "✅ المكتبات جاهزة"
 
-      - name: 🧪 Run VLESS tester
-        run: python main.py
+      - name: 🧪 Run tester (Live logs)
+        run: |
+          set -euo pipefail
+          echo "=================================================="
+          echo "🚀 بدأ الاختبار: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=================================================="
+          # -u = unbuffered  |  stdbuf = line-buffered حتى مع subprocess
+          stdbuf -oL -eL python -u main.py 2>&1 | tee run.log
+          echo "=================================================="
+          echo "🏁 انتهى الاختبار: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "=================================================="
 
-      - name: 📤 Upload working.txt as artifact
+      - name: 📊 Show result summary
+        if: always()
+        run: |
+          echo "📄 محتوى working.txt:"
+          echo "--------------------------------------------------"
+          if [ -s working.txt ]; then
+            cat working.txt
+            echo "--------------------------------------------------"
+            echo "📈 عدد الإعدادات العاملة: $(wc -l < working.txt)"
+          else
+            echo "(فارغ — لا توجد إعدادات عاملة)"
+          fi
+
+      - name: 📤 Upload artifact (working.txt + run.log)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: working-configs
-          path: working.txt
+          name: vless-results-${{ github.run_number }}
+          path: |
+            working.txt
+            run.log
           if-no-files-found: warn
 
-      - name: 💾 Commit and push working.txt (if changed)
+      - name: 💾 Commit working.txt
+        if: success()
         run: |
-          git config user.name "github-actions[bot]"
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add working.txt
           if git diff --staged --quiet; then
-            echo "لا توجد تغييرات في working.txt"
+            echo "ℹ️  لا توجد تغييرات في working.txt"
           else
             git commit -m "chore: update working configs [skip ci]"
             git push
+            echo "✅ تم رفع التحديثات"
           fi
