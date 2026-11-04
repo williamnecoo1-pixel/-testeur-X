@@ -4,19 +4,30 @@ on:
   schedule:
     - cron: '0 */8 * * *'
   workflow_dispatch:
+    inputs:
+      max_workers:
+        description: 'عدد Workers'
+        default: '40'
+      limit:
+        description: 'حد أقصى للإعدادات (0 = الكل)'
+        default: '0'
 
 permissions:
   contents: write
 
 env:
-  # ← هذا هو المفتاح: يجبر Python على عدم تخزين الـ output فـ buffer
   PYTHONUNBUFFERED: "1"
   PYTHONIOENCODING: "utf-8"
+  MAX_WORKERS: ${{ github.event.inputs.max_workers || '40' }}
+  PER_TEST_TIMEOUT: '8'
+  LIMIT_PER_RUN: ${{ github.event.inputs.limit || '0' }}
+  SHUFFLE: '0'
+  PROGRESS_EVERY: '100'
 
 jobs:
   test-configs:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: 📥 Checkout
@@ -31,38 +42,26 @@ jobs:
       - name: 📦 Install deps
         run: |
           set -euo pipefail
-          echo "▶️  تحديث pip..."
           python -m pip install --upgrade pip
-          echo "▶️  تثبيت المكتبات..."
           pip install -r requirements.txt
           echo "✅ المكتبات جاهزة"
 
-      - name: 🧪 Run tester (Live logs)
+      - name: 🧪 Run tester (Live)
         run: |
           set -euo pipefail
-          echo "=================================================="
-          echo "🚀 بدأ الاختبار: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "=================================================="
-          # -u = unbuffered  |  stdbuf = line-buffered حتى مع subprocess
           stdbuf -oL -eL python -u main.py 2>&1 | tee run.log
-          echo "=================================================="
-          echo "🏁 انتهى الاختبار: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "=================================================="
 
-      - name: 📊 Show result summary
+      - name: 📊 Result summary
         if: always()
         run: |
-          echo "📄 محتوى working.txt:"
-          echo "--------------------------------------------------"
           if [ -s working.txt ]; then
-            cat working.txt
-            echo "--------------------------------------------------"
-            echo "📈 عدد الإعدادات العاملة: $(wc -l < working.txt)"
+            echo "✅ عدد الإعدادات العاملة: $(wc -l < working.txt)"
+            head -n 5 working.txt
           else
-            echo "(فارغ — لا توجد إعدادات عاملة)"
+            echo "⚠️ لا توجد إعدادات عاملة"
           fi
 
-      - name: 📤 Upload artifact (working.txt + run.log)
+      - name: 📤 Upload artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -70,6 +69,7 @@ jobs:
           path: |
             working.txt
             run.log
+          retention-days: 7
           if-no-files-found: warn
 
       - name: 💾 Commit working.txt
@@ -80,9 +80,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add working.txt
           if git diff --staged --quiet; then
-            echo "ℹ️  لا توجد تغييرات في working.txt"
+            echo "ℹ️ لا تغيير"
           else
             git commit -m "chore: update working configs [skip ci]"
             git push
-            echo "✅ تم رفع التحديثات"
           fi
