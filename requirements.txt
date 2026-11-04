@@ -1,2 +1,1 @@
-requests[socks]==2.32.3
-
+python-v2ray>=0.1.3
