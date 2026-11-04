@@ -29,8 +29,9 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -c "import requests, socks; print('Python dependencies OK')"
+          python -m pip install "requests[socks]==2.32.3"
+          python -m pip show requests
+          python -c "import sys, requests, socks; print('Python:', sys.executable); print('requests:', requests.__version__); print('Python dependencies OK')"
 
       - name: Download Xray Core
         run: |
