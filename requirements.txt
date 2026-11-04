@@ -1,1 +1,2 @@
 python-v2ray>=0.1.3
+requests
