@@ -1,7 +1,10 @@
-
 # XHTTP Real Delay Checker
 
-This repository tests share links in `reality_configs.txt` using the official Xray Core binary.
+The checker downloads its input automatically from:
+
+`https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main/reality_configs.txt`
+
+It does not edit or push anything to the source repository. It only tests the downloaded links and uploads result files as a GitHub Actions artifact.
 
 ## Filters
 - VLESS, VMess, Trojan
@@ -14,16 +17,14 @@ This repository tests share links in `reality_configs.txt` using the official Xr
 - Cloudflare: `https://cp.cloudflare.com/generate_204` (HTTP 204)
 - Apple: `http://captive.apple.com/hotspot-detect.html` (HTTP 200 with `Success` in body)
 
-A config is marked **WORKING if at least one of the three endpoints returns its expected response**.
-All three outcomes are recorded in `results.csv`. `delay_ms` is the median of successful endpoint timings.
+A config is marked **WORKING if at least one endpoint returns its expected response**. Each endpoint result is recorded separately.
 
-## Files
-- `reality_configs.txt`: input links, one per line
+## Outputs
 - `working_configs.txt`: links that passed at least one test, sorted by delay
 - `failed_configs.txt`: links that did not pass
 - `results.csv`: per-endpoint status and measured delay
 
-## Run
-Push `main.py`, `requirements.txt`, this workflow, and `reality_configs.txt` to the repository, then use **Actions → XHTTP Real Delay Checker → Run workflow**.
+Download these from the `xhttp-check-results` artifact attached to each workflow run.
 
-The workflow runs every six hours. Set `WORKERS` in the workflow to change parallelism.
+## Run
+Push the checker files to a new GitHub repository, then use **Actions → XHTTP Real Delay Checker → Run workflow**. It also runs every six hours.
