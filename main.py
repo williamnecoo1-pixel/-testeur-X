@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -11,9 +12,16 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-import requests
+try:
+    import requests
+except ModuleNotFoundError:
+    # Allow `python main.py` to work even if the runner skipped requirements.txt.
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "requests[socks]==2.32.3"
+    ])
+    import requests
 
-INPUT_FILE = Path("reality_configs.txt")
+SOURCE_URL = "https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main/reality_configs.txt"
 XRAY_BIN = os.environ.get("XRAY_BIN", "./xray/xray")
 WORKERS = int(os.environ.get("WORKERS", "25"))
 BASE_SOCKS_PORT = int(os.environ.get("BASE_SOCKS_PORT", "20000"))
@@ -31,6 +39,19 @@ print_lock = threading.Lock()
 def log(message):
     with print_lock:
         print(message, flush=True)
+
+
+def fetch_source():
+    """Download the input list from the configured raw GitHub URL."""
+    response = requests.get(
+        SOURCE_URL,
+        headers={"User-Agent": "Mozilla/5.0 XHTTP-Checker/1.0"},
+        timeout=(15, 60)
+    )
+    response.raise_for_status()
+    if not response.text.strip():
+        raise RuntimeError("The source file is empty.")
+    return response.text.splitlines()
 
 
 def b64decode_text(value):
@@ -291,10 +312,11 @@ def test_one(index, link):
 def main():
     if not Path(XRAY_BIN).exists():
         raise SystemExit(f"Xray binary not found: {XRAY_BIN}")
-    if not INPUT_FILE.exists():
-        raise SystemExit(f"Input file not found: {INPUT_FILE}")
-
-    raw_lines = INPUT_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+    log(f"[SOURCE] Downloading configs from: {SOURCE_URL}")
+    try:
+        raw_lines = fetch_source()
+    except Exception as exc:
+        raise SystemExit(f"Could not download source configs: {exc}")
     seen = set()
     links = []
     for line in raw_lines:
@@ -305,7 +327,7 @@ def main():
             seen.add(line)
             links.append(line)
 
-    log(f"[START] Unique input links: {len(links)} | workers: {WORKERS}")
+    log(f"[START] Unique downloaded links: {len(links)} | workers: {WORKERS}")
 
     results = []
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
