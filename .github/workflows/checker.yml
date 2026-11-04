@@ -47,7 +47,8 @@ jobs:
         env:
           WORKERS: "25"
           XRAY_BIN: "./xray/xray"
-        run: python main.py
+          PYTHONUNBUFFERED: "1"
+        run: python -u main.py
 
       - name: Upload test results
         if: always()
