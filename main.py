@@ -24,7 +24,7 @@ CONFIGS_URL = "https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main
 
 TEST_URLS = [
     "https://www.google.com/generate_204",
-    "http://cp.cloudflare.com/generate_204",
+    "https://www.youtube.com/generate_204",
     "http://captive.apple.com/hotspot-detect.html",
     "http://edge-http.microsoft.com/captiveportal/generate_204",
 ]
