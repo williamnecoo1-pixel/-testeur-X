@@ -6,7 +6,7 @@ import urllib.parse
 
 # ================== الإعدادات ==================
 SOURCES = [
-
+"https://github.com/williamnecoo1-pixel/-testeur-X/raw/refs/heads/main/working.txt",
 ]
 
 ALLOWED_PROTOCOLS = ["vless", "vmess", "trojan"]
