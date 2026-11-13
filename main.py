@@ -22,16 +22,17 @@ from python_v2ray.downloader import BinaryDownloader
 # ============================================================
 CONFIGS_URL = "https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main/reality_configs.txt"
 
+# ✅ المواقع ديال التيست
 TEST_URLS = [
     "https://www.google.com/generate_204",
     "http://cp.cloudflare.com/generate_204",
     "http://captive.apple.com/hotspot-detect.html",
-    "http://cp.cloudflare.com/generate_204",
+    "http://www.gstatic.com/generate_204",
 ]
 
-MAX_WORKERS      = int(os.getenv("MAX_WORKERS", "40"))          # عدد الكونفيغات المتوازية
-PER_TEST_TIMEOUT = int(os.getenv("PER_TEST_TIMEOUT", "8"))      # ثانية لكل رابط
-LIMIT_PER_RUN    = int(os.getenv("LIMIT_PER_RUN", "0"))         # 0 = بلا حد
+MAX_WORKERS      = int(os.getenv("MAX_WORKERS", "40"))          
+PER_TEST_TIMEOUT = int(os.getenv("PER_TEST_TIMEOUT", "8"))      
+LIMIT_PER_RUN    = int(os.getenv("LIMIT_PER_RUN", "0"))         
 SHUFFLE          = os.getenv("SHUFFLE", "0") == "1"
 PROGRESS_EVERY   = int(os.getenv("PROGRESS_EVERY", "50"))
 
@@ -71,12 +72,16 @@ def vless_to_xray(uri, local_port):
     path = params.get('path', [''])[0]
     mode = params.get('mode', [''])[0]
     
+    # ✅ استخراج البصمة (Fingerprint) من الرابط
+    fp = params.get('fp', [''])[0]
+    
     stream = {"network": network, "security": security}
     
     if security == "tls":
         tls = {}
         if sni: tls["serverName"] = sni
         if alpn: tls["alpn"] = alpn
+        if fp: tls["fingerprint"] = fp  # 👈 الحل الأساسي: تمرير البصمة
         if ech: tls["ech"] = {"query": ech.replace("%2B", "+")}
         stream["tlsSettings"] = tls
         
@@ -113,13 +118,24 @@ def get_free_port():
     s.close()
     return port
 
+# ✅ دالة كتسنى حتى يفتح البورت ديال Xray
+def wait_for_port(port, timeout=3):
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except:
+            time.sleep(0.1)
+    return False
+
 def check_url(url, proxy_port, timeout):
     proxies = {
         'http': f'socks5h://127.0.0.1:{proxy_port}',
         'https': f'socks5h://127.0.0.1:{proxy_port}'
     }
     try:
-        r = requests.get(url, proxies=proxies, timeout=timeout, headers={'User-Agent': 'Mozilla/5.0'})
+        r = requests.get(url, proxies=proxies, timeout=(3, timeout), headers={'User-Agent': 'Mozilla/5.0'})
         return r.status_code in [200, 204]
     except:
         return False
@@ -128,6 +144,9 @@ def check_url(url, proxy_port, timeout):
 # اختبار كونفيغ واحد
 # ============================================================
 def test_one_config(cfg: str, xray_bin: str) -> Tuple[str, bool, str]:
+    temp_path = ""
+    log_path = ""
+    proc = None
     try:
         port = get_free_port()
         config = vless_to_xray(cfg, port)
@@ -136,44 +155,61 @@ def test_one_config(cfg: str, xray_bin: str) -> Tuple[str, bool, str]:
             json.dump(config, f)
             temp_path = f.name
             
-        # 1. فتح النفق (Xray)
+        # ✅ ملف اللوجات ديال Xray
+        log_file = tempfile.NamedTemporaryFile('w+', suffix='.log', delete=False)
+        log_path = log_file.name
+            
         proc = subprocess.Popen(
             [xray_bin, "run", "-c", temp_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stdout=log_file,
+            stderr=log_file
         )
         
-        # الانتظار باش يفتح Xray (0.3 ثانية كافية)
-        time.sleep(0.3)
-        
-        if proc.poll() is not None:
-            os.remove(temp_path)
-            return cfg, False, "Xray crash"
+        # ✅ نسناو البورت يفتح
+        if not wait_for_port(port, timeout=3):
+            err = "Xray failed to bind"
+            try:
+                log_file.seek(0)
+                err = log_file.read().strip().split('\n')[-1][:80]
+            except: pass
+            return cfg, False, err
             
         success = False
         info = ""
         
-        # 2. إرسال 4 طلبات دفعة واحدة عبر النفق الوحيد
-        with ThreadPoolExecutor(max_workers=4) as ex:
+        # ✅ رجعنا الاختبار المتوازي (Concurrent) باش يكون سريع
+        with ThreadPoolExecutor(max_workers=len(TEST_URLS)) as ex:
             futures = {ex.submit(check_url, url, port, PER_TEST_TIMEOUT): url for url in TEST_URLS}
             for fut in as_completed(futures):
                 try:
                     if fut.result():
                         success = True
-                        # إلا نجح أي واحد، كنسجلو ونقطعو الباقي
                         info = f"نجح عبر {futures[fut].split('/')[2]}"
-                        break 
+                        break # إلا نجح شي واحد، كنقطعو الباقي
                 except:
                     pass
                 
-        # 3. إغلاق النفق
+        # إغلاق Xray
         proc.terminate()
         proc.wait(timeout=2)
-        os.remove(temp_path)
         
+        # إلا فشل، كنقرو آخر خطأ من Xray
+        if not success:
+            try:
+                log_file.seek(0)
+                err_log = log_file.read().strip()
+                info = err_log.split('\n')[-1][:80] if err_log else "Connection failed/Timeout"
+            except: pass
+                
         return cfg, success, info
     except Exception as e:
         return cfg, False, f"Error: {e}"
+    finally:
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait()
+        if temp_path and os.path.exists(temp_path): os.remove(temp_path)
+        if log_path and os.path.exists(log_path): os.remove(log_path)
 
 def fetch_configs(url: str) -> List[str]:
     log(f"جلب الإعدادات من: {url}", "⬇️")
@@ -211,9 +247,15 @@ def main() -> None:
     root = Path(".")
     try:
         BinaryDownloader(root).ensure_all()
-        xray_bin = str(next(root.rglob("xray*")))
-        if not os.access(xray_bin, os.X_OK):
-            os.chmod(xray_bin, 0o755)
+        xray_bin = None
+        for p in root.rglob("xray*"):
+            if p.is_file() and os.access(p, os.X_OK):
+                xray_bin = str(p)
+                break
+        
+        if not xray_bin:
+            raise Exception("Xray binary not found")
+            
         log(f"Xray-core جاهز: {xray_bin}", "✅")
     except Exception as e:
         log(f"فشل تجهيز Xray: {e}", "❌")
