@@ -22,7 +22,6 @@ from python_v2ray.downloader import BinaryDownloader
 # ============================================================
 CONFIGS_URL = "https://github.com/williamnecoo1-pixel/testrw/raw/refs/heads/main/reality_configs.txt"
 
-# ✅ المواقع ديال التيست
 TEST_URLS = [
     "https://www.google.com/generate_204",
     "http://cp.cloudflare.com/generate_204",
@@ -30,9 +29,9 @@ TEST_URLS = [
     "http://www.gstatic.com/generate_204",
 ]
 
-MAX_WORKERS      = int(os.getenv("MAX_WORKERS", "40"))          
-PER_TEST_TIMEOUT = int(os.getenv("PER_TEST_TIMEOUT", "8"))      
-LIMIT_PER_RUN    = int(os.getenv("LIMIT_PER_RUN", "0"))         
+MAX_WORKERS      = int(os.getenv("MAX_WORKERS", "40"))
+PER_TEST_TIMEOUT = int(os.getenv("PER_TEST_TIMEOUT", "8"))
+LIMIT_PER_RUN    = int(os.getenv("LIMIT_PER_RUN", "0"))
 SHUFFLE          = os.getenv("SHUFFLE", "0") == "1"
 PROGRESS_EVERY   = int(os.getenv("PROGRESS_EVERY", "50"))
 
@@ -72,8 +71,12 @@ def vless_to_xray(uri, local_port):
     path = params.get('path', [''])[0]
     mode = params.get('mode', [''])[0]
     
-    # ✅ استخراج البصمة (Fingerprint) من الرابط
+    # ✅ استخراج البصمة (Fingerprint)
     fp = params.get('fp', [''])[0]
+    # ✅ استخراج الشهادة المثبتة (Pinned Cert)
+    pcs = params.get('pcs', [''])[0]
+    # ✅ استخراج allowInsecure
+    allow_insecure = params.get('allowInsecure', ['0'])[0] == '1'
     
     stream = {"network": network, "security": security}
     
@@ -81,7 +84,9 @@ def vless_to_xray(uri, local_port):
         tls = {}
         if sni: tls["serverName"] = sni
         if alpn: tls["alpn"] = alpn
-        if fp: tls["fingerprint"] = fp  # 👈 الحل الأساسي: تمرير البصمة
+        if fp: tls["fingerprint"] = fp 
+        if pcs: tls["pinnedPeerCertificateChainSha256"] = pcs.split(',')
+        if allow_insecure: tls["allowInsecure"] = True
         if ech: tls["ech"] = {"query": ech.replace("%2B", "+")}
         stream["tlsSettings"] = tls
         
@@ -118,7 +123,7 @@ def get_free_port():
     s.close()
     return port
 
-# ✅ دالة كتسنى حتى يفتح البورت ديال Xray
+# دالة كتسنى حتى يفتح البورت ديال Xray
 def wait_for_port(port, timeout=3):
     start = time.time()
     while time.time() - start < timeout:
@@ -155,7 +160,6 @@ def test_one_config(cfg: str, xray_bin: str) -> Tuple[str, bool, str]:
             json.dump(config, f)
             temp_path = f.name
             
-        # ✅ ملف اللوجات ديال Xray
         log_file = tempfile.NamedTemporaryFile('w+', suffix='.log', delete=False)
         log_path = log_file.name
             
@@ -165,7 +169,6 @@ def test_one_config(cfg: str, xray_bin: str) -> Tuple[str, bool, str]:
             stderr=log_file
         )
         
-        # ✅ نسناو البورت يفتح
         if not wait_for_port(port, timeout=3):
             err = "Xray failed to bind"
             try:
@@ -177,23 +180,22 @@ def test_one_config(cfg: str, xray_bin: str) -> Tuple[str, bool, str]:
         success = False
         info = ""
         
-        # ✅ رجعنا الاختبار المتوازي (Concurrent) باش يكون سريع
-        with ThreadPoolExecutor(max_workers=len(TEST_URLS)) as ex:
-            futures = {ex.submit(check_url, url, port, PER_TEST_TIMEOUT): url for url in TEST_URLS}
+        # ✅ الاختبار المتوازي مع إلغاء الباقي بمجرد النجاح
+        ex = ThreadPoolExecutor(max_workers=len(TEST_URLS))
+        futures = {ex.submit(check_url, url, port, PER_TEST_TIMEOUT): url for url in TEST_URLS}
+        try:
             for fut in as_completed(futures):
-                try:
-                    if fut.result():
-                        success = True
-                        info = f"نجح عبر {futures[fut].split('/')[2]}"
-                        break # إلا نجح شي واحد، كنقطعو الباقي
-                except:
-                    pass
+                if fut.result():
+                    success = True
+                    info = f"نجح عبر {futures[fut].split('/')[2]}"
+                    break 
+        finally:
+            # هادي هي اللي كتقتل الباقي دغيا ومكتخليكش تسنى 8 ثواني
+            ex.shutdown(wait=False, cancel_futures=True)
                 
-        # إغلاق Xray
         proc.terminate()
         proc.wait(timeout=2)
         
-        # إلا فشل، كنقرو آخر خطأ من Xray
         if not success:
             try:
                 log_file.seek(0)
@@ -242,7 +244,6 @@ def main() -> None:
     log_header("VLESS Concurrent Tester (Single Tunnel) — بدأ")
     log(f"Workers={MAX_WORKERS} | Timeout/URL={PER_TEST_TIMEOUT}s | Limit={LIMIT_PER_RUN or '∞'}", "⚙️")
 
-    # تجهيز Xray
     log_header("1) تجهيز Xray-core")
     root = Path(".")
     try:
@@ -261,7 +262,6 @@ def main() -> None:
         log(f"فشل تجهيز Xray: {e}", "❌")
         sys.exit(1)
 
-    # جلب الإعدادات
     log_header("2) جلب الإعدادات")
     configs = fetch_configs(CONFIGS_URL)
     if not configs:
@@ -274,7 +274,6 @@ def main() -> None:
     total = len(configs)
     OUTPUT_FILE.write_text("", encoding="utf-8")
 
-    # الاختبار المتوازي
     log_header(f"3) اختبار متوازي ({total} إعداد)")
     stats = {"done": 0, "working": 0, "failed": 0}
     stats_lock = threading.Lock()
@@ -309,7 +308,6 @@ def main() -> None:
                 eta = int((total - done) / rate) if rate > 0 else 0
                 log(f"📊 [{done}/{total}] ✅{working} ✗{stats['failed']} | {rate:.1f} cfg/s | ETA {eta}s", "⏱️")
 
-    # النتيجة
     log_header("4) ملخص")
     elapsed = int(time.time() - start)
     log(f"الوقت الكلي: {elapsed}s ({elapsed//60}m{elapsed%60}s)", "⏱️")
